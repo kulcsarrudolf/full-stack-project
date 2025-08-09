@@ -42,6 +42,15 @@ packages/
 │   │   ├── utils/        # Helper functions
 │   │   ├── stores/       # State management
 │   │   └── assets/       # Images, icons
+├── external-services/    # Third-party integrations
+│   ├── src/
+│   │   ├── providers/    # payment.provider.ts, email.provider.ts
+│   │   ├── clients/      # stripe.client.ts, sendgrid.client.ts
+│   │   ├── webhooks/     # stripe.webhook.ts, github.webhook.ts
+│   │   ├── adapters/     # External API adapters
+│   │   ├── schemas/      # External service schemas
+│   │   ├── utils/        # Service-specific utilities
+│   │   └── __tests__/    # External service tests
 └── shared/               # Common code
     ├── types/            # Shared TypeScript types
     ├── utils/            # Cross-platform utilities
@@ -78,6 +87,18 @@ date-helpers.util.ts     # Utility functions
 UserProfile.tsx          # PascalCase components
 useUserData.ts           # camelCase hooks
 user-api.util.ts         # kebab-case utilities
+```
+
+### External Services Patterns
+
+```typescript
+stripe.provider.ts       # Payment provider
+sendgrid.client.ts       # Email service client
+github.webhook.ts        # Webhook handlers
+slack.adapter.ts         # API adapters
+payment.schema.ts        # Service schemas
+webhook.util.ts          # Utility functions
+stripe.test.ts           # Service tests
 ```
 
 ## 🐳 Docker & Containerization
@@ -184,6 +205,8 @@ AI-powered development with Cursor agent configured for TypeScript monorepo:
 "Create a user profile update feature with validation"
 "Add Redis caching to the user service with 1 hour TTL"
 "Generate integration tests for the authentication flow"
+"Add Stripe payment processing with webhook handling"
+"Create SendGrid email templates with dynamic content"
 ```
 
 **🧠 Intelligent Code Assistance**:
@@ -250,6 +273,8 @@ GET /docs/json      # OpenAPI specification
 yarn workspace backend add fastify
 yarn workspace backend add ioredis @types/ioredis
 yarn workspace frontend add react
+yarn workspace external-services add stripe
+yarn workspace external-services add @sendgrid/mail
 yarn workspace shared build
 
 # Redis commands
@@ -276,14 +301,15 @@ yarn test-storybook      # Run interaction tests
 
 ### Comprehensive Testing Approach
 
-| Package         | Framework                                          | Purpose                                                     |
-| --------------- | -------------------------------------------------- | ----------------------------------------------------------- |
-| **Frontend**    | Vitest + React Testing Library                     | Component and integration testing                           |
-| **Backend**     | Node.js native test runner / Jest + Testcontainers | API endpoint and service testing with real databases        |
-| **Shared**      | Jest/Vitest                                        | Utility and type testing                                    |
-| **Storybook**   | Play functions                                     | Interactive component testing                               |
-| **Integration** | Testcontainers                                     | Database and Redis integration tests with Docker containers |
-| **Cache**       | Testcontainers + Redis                             | Redis caching logic testing with isolated containers        |
+| Package               | Framework                                          | Purpose                                                     |
+| --------------------- | -------------------------------------------------- | ----------------------------------------------------------- |
+| **Frontend**          | Vitest + React Testing Library                     | Component and integration testing                           |
+| **Backend**           | Node.js native test runner / Jest + Testcontainers | API endpoint and service testing with real databases        |
+| **External Services** | Jest + Service Mocks                               | Third-party integration testing with mocked responses       |
+| **Shared**            | Jest/Vitest                                        | Utility and type testing                                    |
+| **Storybook**         | Play functions                                     | Interactive component testing                               |
+| **Integration**       | Testcontainers                                     | Database and Redis integration tests with Docker containers |
+| **Cache**             | Testcontainers + Redis                             | Redis caching logic testing with isolated containers        |
 
 ### Testcontainers Integration
 
@@ -345,6 +371,52 @@ yarn test-storybook      # Storybook interaction tests
 yarn workspace backend test
 yarn workspace backend test:integration
 yarn workspace frontend test
+yarn workspace external-services test
+yarn workspace external-services test:integration
+```
+
+### External Services Testing
+
+**Mock-based Testing** for reliable third-party service integration:
+
+```typescript
+// external-services/src/__tests__/stripe.provider.test.ts
+import { StripeProvider } from "../providers/stripe.provider";
+import { jest } from "@jest/globals";
+
+jest.mock("stripe", () => ({
+  Stripe: jest.fn().mockImplementation(() => ({
+    charges: {
+      create: jest.fn().mockResolvedValue({
+        id: "ch_test_123",
+        status: "succeeded",
+      }),
+    },
+  })),
+}));
+
+describe("StripeProvider", () => {
+  let stripeProvider: StripeProvider;
+
+  beforeEach(() => {
+    stripeProvider = new StripeProvider();
+  });
+
+  it("should process payment successfully", async () => {
+    const result = await stripeProvider.createCharge({
+      amount: 2000,
+      currency: "usd",
+      source: "tok_visa",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.id).toBe("ch_test_123");
+  });
+
+  it("should handle webhook validation", async () => {
+    // Test webhook signature validation and processing
+  });
+});
 ```
 
 ## ✨ Code Quality & Standards
@@ -392,6 +464,16 @@ yarn lint-staged
 - **api/**: API client configuration and endpoint definitions
 - **constants/**: Application-wide constants and enums
 - **layouts/**: Reusable page layout components
+
+### External Services Enhancements
+
+- **providers/**: Service abstraction layer (payment, email, storage)
+- **clients/**: HTTP clients for external APIs with retry logic
+- **webhooks/**: Webhook handlers for third-party services
+- **adapters/**: Data transformation between external and internal formats
+- **schemas/**: External API response/request validation schemas
+- **mocks/**: Mock implementations for testing and development
+- **configs/**: Service-specific configuration and environment variables
 
 ### Shared Enhancements
 
@@ -464,12 +546,16 @@ yarn dev
 # Install package in specific workspace
 yarn workspace backend add fastify
 yarn workspace frontend add react
+yarn workspace external-services add stripe
+yarn workspace external-services add @sendgrid/mail
 
 # Run tests
 yarn test
 yarn workspace backend test
 yarn workspace backend test:integration  # Run with Testcontainers
 yarn workspace frontend test
+yarn workspace external-services test
+yarn workspace external-services test:integration  # Test with service mocks
 
 # Build all packages
 yarn build
