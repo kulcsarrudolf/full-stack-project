@@ -18,6 +18,11 @@ A comprehensive TypeScript monorepo featuring React frontend, Fastify backend, a
 ![Jest](https://img.shields.io/badge/Jest/Vitest-C21325?style=flat&logo=jest&logoColor=white)
 ![Testcontainers](https://img.shields.io/badge/Testcontainers-40D09A?style=flat&logo=docker&logoColor=white)
 ![Husky](https://img.shields.io/badge/Husky-🐶-yellow?style=flat)
+![Auth0](https://img.shields.io/badge/Auth0-000000?style=flat&logo=auth0&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind-06B6D4?style=flat&logo=tailwindcss&logoColor=white)
+![Resend](https://img.shields.io/badge/Resend-000000?style=flat&logo=resend&logoColor=white)
+![Twilio](https://img.shields.io/badge/Twilio-000000?style=flat&logo=twilio&logoColor=white)
+![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat&logo=github&logoColor=white)
 
 ## 📦 Monorepo Architecture
 
