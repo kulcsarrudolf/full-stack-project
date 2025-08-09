@@ -44,8 +44,8 @@ packages/
 │   │   └── assets/       # Images, icons
 ├── external-services/    # Third-party integrations
 │   ├── src/
-│   │   ├── providers/    # payment.provider.ts, email.provider.ts, sms.provider.ts
-│   │   ├── clients/      # stripe.client.ts, resend.client.ts, twilio.client.ts
+│   │   ├── providers/    # payment.provider.ts, email.provider.ts, sms.provider.ts, auth.provider.ts
+│   │   ├── clients/      # stripe.client.ts, resend.client.ts, twilio.client.ts, auth0.client.ts
 │   │   ├── webhooks/     # stripe.webhook.ts, resend.webhook.ts, twilio.webhook.ts
 │   │   ├── adapters/     # External API adapters
 │   │   ├── schemas/      # External service schemas
@@ -95,12 +95,14 @@ user-api.util.ts         # kebab-case utilities
 stripe.provider.ts       # Payment provider
 resend.client.ts         # Email service client
 twilio.client.ts         # SMS service client
-sendgrid.client.ts       # Alternative email client
+auth0.client.ts          # Auth0 authentication client
+auth0-management.client.ts # Auth0 Management API client
 github.webhook.ts        # Webhook handlers
 slack.adapter.ts         # API adapters
 payment.schema.ts        # Service schemas
 email.schema.ts          # Email validation schemas
 sms.schema.ts            # SMS validation schemas
+auth.schema.ts           # Authentication schemas
 webhook.util.ts          # Utility functions
 stripe.test.ts           # Service tests
 ```
@@ -192,6 +194,301 @@ await twilio.messages.create({
 });
 ```
 
+## 🔐 Authentication & Authorization
+
+### Enterprise-Grade Authentication with Auth0
+
+**🎯 Why Auth0 for Production Applications:**
+
+✅ **Passwordless Authentication**: Email codes, SMS verification, and magic links  
+✅ **30+ Social Providers**: Google, Facebook, GitHub, LinkedIn, Twitter, and more  
+✅ **Enterprise SSO**: SAML, OIDC, Active Directory integration  
+✅ **Advanced Security**: Multi-factor auth, anomaly detection, breached password detection  
+✅ **Compliance Ready**: SOC2, GDPR, HIPAA compliance features  
+✅ **Global CDN**: Ultra-fast authentication worldwide  
+✅ **Free Tier**: 7,000 monthly active users
+
+### Auth0 Implementation
+
+**Complete passwordless and social authentication setup:**
+
+```typescript
+// external-services/src/clients/auth0.client.ts
+import { AuthenticationApi, ManagementApi } from "auth0";
+
+export class Auth0Client {
+  private auth: AuthenticationApi;
+  private mgmt: ManagementApi;
+
+  constructor() {
+    this.auth = new AuthenticationApi({
+      domain: process.env.AUTH0_DOMAIN!,
+      clientId: process.env.AUTH0_CLIENT_ID!,
+      clientSecret: process.env.AUTH0_CLIENT_SECRET!,
+    });
+  }
+
+  // Passwordless email login
+  async sendPasswordlessEmail(email: string) {
+    return this.auth.passwordless.sendEmail({
+      email,
+      send: "code",
+      connection: "email",
+    });
+  }
+
+  // Verify passwordless code
+  async verifyPasswordlessCode(email: string, code: string) {
+    return this.auth.passwordless.signIn({
+      email,
+      code,
+      connection: "email",
+    });
+  }
+
+  // Social login URLs
+  getSocialLoginUrl(provider: "google" | "facebook" | "github") {
+    return (
+      `https://${process.env.AUTH0_DOMAIN}/authorize?` +
+      `response_type=code&` +
+      `client_id=${process.env.AUTH0_CLIENT_ID}&` +
+      `connection=${provider}&` +
+      `redirect_uri=${process.env.AUTH0_CALLBACK_URL}`
+    );
+  }
+}
+```
+
+### Advanced Auth0 Features
+
+**Enterprise-grade authentication capabilities:**
+
+```typescript
+// external-services/src/clients/auth0.client.ts (Extended)
+import { AuthenticationApi, ManagementApi } from "auth0";
+
+export class Auth0Client {
+  private auth: AuthenticationApi;
+  private mgmt: ManagementApi;
+
+  constructor() {
+    this.auth = new AuthenticationApi({
+      domain: process.env.AUTH0_DOMAIN!,
+      clientId: process.env.AUTH0_CLIENT_ID!,
+      clientSecret: process.env.AUTH0_CLIENT_SECRET!,
+    });
+
+    this.mgmt = new ManagementApi({
+      domain: process.env.AUTH0_DOMAIN!,
+      clientId: process.env.AUTH0_CLIENT_ID!,
+      clientSecret: process.env.AUTH0_CLIENT_SECRET!,
+    });
+  }
+
+  // Passwordless SMS login
+  async sendPasswordlessSMS(phoneNumber: string) {
+    return this.auth.passwordless.sendSMS({
+      phone_number: phoneNumber,
+      connection: "sms",
+    });
+  }
+
+  // Multi-factor authentication
+  async sendMFAChallenge(mfaToken: string) {
+    return this.auth.mfa.challenge({
+      mfa_token: mfaToken,
+      challenge_type: "otp",
+    });
+  }
+
+  // Get user profile
+  async getUserProfile(accessToken: string) {
+    return this.auth.users.getInfo(accessToken);
+  }
+
+  // Update user metadata
+  async updateUserMetadata(userId: string, metadata: any) {
+    return this.mgmt.users.update({ id: userId }, { user_metadata: metadata });
+  }
+}
+```
+
+### Frontend Integration
+
+**React hooks for Auth0 authentication:**
+
+```typescript
+// frontend/src/hooks/useAuth.ts
+import { useState, useEffect } from "react";
+import { Auth0Client } from "@repo/external-services";
+
+export function useAuth() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const authClient = new Auth0Client();
+
+  useEffect(() => {
+    // Check for existing token in localStorage
+    const token = localStorage.getItem("auth0_access_token");
+    if (token) {
+      authClient
+        .getUserProfile(token)
+        .then((userProfile) => {
+          setUser(userProfile);
+          setAccessToken(token);
+          setLoading(false);
+        })
+        .catch(() => {
+          localStorage.removeItem("auth0_access_token");
+          setLoading(false);
+        });
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  const sendPasswordlessEmail = async (email: string) => {
+    return authClient.sendPasswordlessEmail(email);
+  };
+
+  const verifyEmailCode = async (email: string, code: string) => {
+    try {
+      const result = await authClient.verifyPasswordlessCode(email, code);
+      localStorage.setItem("auth0_access_token", result.access_token);
+      const userProfile = await authClient.getUserProfile(result.access_token);
+      setUser(userProfile);
+      setAccessToken(result.access_token);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const sendPasswordlessSMS = async (phoneNumber: string) => {
+    return authClient.sendPasswordlessSMS(phoneNumber);
+  };
+
+  const getSocialLoginUrl = (provider: "google" | "facebook" | "github") => {
+    return authClient.getSocialLoginUrl(provider);
+  };
+
+  const signOut = async () => {
+    localStorage.removeItem("auth0_access_token");
+    setUser(null);
+    setAccessToken(null);
+  };
+
+  return {
+    user,
+    loading,
+    accessToken,
+    sendPasswordlessEmail,
+    verifyEmailCode,
+    sendPasswordlessSMS,
+    getSocialLoginUrl,
+    signOut,
+  };
+}
+```
+
+### Backend Integration
+
+**Fastify plugin for Auth0 authentication:**
+
+```typescript
+// backend/src/plugins/auth.plugin.ts
+import { FastifyPluginAsync } from "fastify";
+import { Auth0Client } from "@repo/external-services";
+import jwt from "jsonwebtoken";
+import jwksClient from "jwks-rsa";
+
+export const authPlugin: FastifyPluginAsync = async (fastify) => {
+  const authClient = new Auth0Client();
+
+  // JWKS client for token verification
+  const client = jwksClient({
+    jwksUri: `https://${process.env.AUTH0_DOMAIN}/.well-known/jwks.json`,
+  });
+
+  function getKey(header: any, callback: any) {
+    client.getSigningKey(header.kid, (err, key) => {
+      const signingKey = key?.getPublicKey();
+      callback(null, signingKey);
+    });
+  }
+
+  fastify.decorate("authenticate", async (request, reply) => {
+    try {
+      const token = request.headers.authorization?.replace("Bearer ", "");
+      if (!token) {
+        reply.code(401).send({ error: "No token provided" });
+        return;
+      }
+
+      // Verify JWT token
+      const decoded = await new Promise((resolve, reject) => {
+        jwt.verify(
+          token,
+          getKey,
+          {
+            audience: process.env.AUTH0_CLIENT_ID,
+            issuer: `https://${process.env.AUTH0_DOMAIN}/`,
+            algorithms: ["RS256"],
+          },
+          (err, decoded) => {
+            if (err) reject(err);
+            else resolve(decoded);
+          }
+        );
+      });
+
+      // Get full user profile
+      const userProfile = await authClient.getUserProfile(token);
+      request.user = { ...decoded, profile: userProfile };
+    } catch (error) {
+      reply.code(401).send({ error: "Authentication failed" });
+    }
+  });
+
+  // Optional: Role-based authorization
+  fastify.decorate("authorize", (roles: string[]) => {
+    return async (request: any, reply: any) => {
+      if (!request.user) {
+        reply.code(401).send({ error: "Not authenticated" });
+        return;
+      }
+
+      const userRoles = request.user.profile?.user_metadata?.roles || [];
+      const hasRole = roles.some((role) => userRoles.includes(role));
+
+      if (!hasRole) {
+        reply.code(403).send({ error: "Insufficient permissions" });
+        return;
+      }
+    };
+  });
+};
+
+// Usage in routes
+fastify.get(
+  "/protected",
+  { preHandler: [fastify.authenticate] },
+  async (request, reply) => {
+    return { user: request.user };
+  }
+);
+
+// Admin-only route
+fastify.get(
+  "/admin",
+  { preHandler: [fastify.authenticate, fastify.authorize(["admin"])] },
+  async (request, reply) => {
+    return { message: "Admin access granted" };
+  }
+);
+```
+
 ## 🤖 Cursor Agent Configuration
 
 AI-powered development with Cursor agent configured for TypeScript monorepo:
@@ -235,6 +532,11 @@ AI-powered development with Cursor agent configured for TypeScript monorepo:
 "Create Resend email templates with React components"
 "Add Twilio SMS verification with rate limiting"
 "Build notification system with email and SMS providers"
+"Implement passwordless login with Auth0 email codes"
+"Add social login with Google, Facebook, and GitHub using Auth0"
+"Create protected routes with JWT authentication middleware"
+"Add multi-factor authentication with Auth0"
+"Implement role-based authorization with Auth0 metadata"
 ```
 
 **🧠 Intelligent Code Assistance**:
@@ -289,6 +591,17 @@ RESEND_API_KEY=re_...
 TWILIO_ACCOUNT_SID=AC...
 TWILIO_AUTH_TOKEN=...
 TWILIO_PHONE_NUMBER=+1234567890
+
+# Authentication
+AUTH0_DOMAIN=your-domain.auth0.com
+AUTH0_CLIENT_ID=your_client_id
+AUTH0_CLIENT_SECRET=your_client_secret
+AUTH0_CALLBACK_URL=http://localhost:3000/auth/callback
+AUTH0_AUDIENCE=https://your-api.auth0.com
+
+# App Configuration
+APP_URL=http://localhost:3000
+JWT_SECRET=your-jwt-secret-key
 ```
 
 ## 📖 API Documentation
@@ -312,6 +625,9 @@ yarn workspace external-services add stripe
 yarn workspace external-services add resend
 yarn workspace external-services add twilio
 yarn workspace external-services add @sendgrid/mail
+yarn workspace external-services add auth0
+yarn workspace external-services add jsonwebtoken @types/jsonwebtoken
+yarn workspace external-services add jwks-rsa
 yarn workspace shared build
 
 # Redis commands
@@ -532,6 +848,141 @@ describe("TwilioProvider", () => {
     // Test Twilio webhook processing for delivery status
   });
 });
+
+// external-services/src/__tests__/auth0.provider.test.ts
+import { Auth0Client } from "../clients/auth0.client";
+import { jest } from "@jest/globals";
+
+jest.mock("auth0", () => ({
+  AuthenticationApi: jest.fn().mockImplementation(() => ({
+    passwordless: {
+      sendEmail: jest.fn().mockResolvedValue({
+        email: "user@example.com",
+        status: "sent",
+      }),
+      signIn: jest.fn().mockResolvedValue({
+        access_token: "test_token_123",
+        token_type: "Bearer",
+        expires_in: 86400,
+      }),
+    },
+  })),
+}));
+
+describe("Auth0Client", () => {
+  let auth0Client: Auth0Client;
+
+  beforeEach(() => {
+    auth0Client = new Auth0Client();
+  });
+
+  it("should send passwordless email successfully", async () => {
+    const result = await auth0Client.sendPasswordlessEmail("user@example.com");
+
+    expect(result.email).toBe("user@example.com");
+    expect(result.status).toBe("sent");
+  });
+
+  it("should verify passwordless code successfully", async () => {
+    const result = await auth0Client.verifyPasswordlessCode(
+      "user@example.com",
+      "123456"
+    );
+
+    expect(result.access_token).toBe("test_token_123");
+    expect(result.token_type).toBe("Bearer");
+  });
+
+  it("should generate social login URLs correctly", async () => {
+    const googleUrl = auth0Client.getSocialLoginUrl("google");
+
+    expect(googleUrl).toContain("connection=google");
+    expect(googleUrl).toContain("client_id=");
+  });
+});
+
+// external-services/src/__tests__/auth0-extended.test.ts
+import { Auth0Client } from "../clients/auth0.client";
+import { jest } from "@jest/globals";
+
+// Extended Auth0 testing with SMS and MFA
+jest.mock("auth0", () => ({
+  AuthenticationApi: jest.fn().mockImplementation(() => ({
+    passwordless: {
+      sendEmail: jest.fn().mockResolvedValue({
+        email: "user@example.com",
+        status: "sent",
+      }),
+      sendSMS: jest.fn().mockResolvedValue({
+        phone_number: "+1234567890",
+        status: "sent",
+      }),
+      signIn: jest.fn().mockResolvedValue({
+        access_token: "test_token_123",
+        token_type: "Bearer",
+        expires_in: 86400,
+      }),
+    },
+    mfa: {
+      challenge: jest.fn().mockResolvedValue({
+        challenge_type: "otp",
+        oob_code: "test_oob_code",
+      }),
+    },
+    users: {
+      getInfo: jest.fn().mockResolvedValue({
+        sub: "auth0|123456789",
+        email: "user@example.com",
+        name: "John Doe",
+      }),
+    },
+  })),
+  ManagementApi: jest.fn().mockImplementation(() => ({
+    users: {
+      update: jest.fn().mockResolvedValue({
+        user_metadata: { role: "admin" },
+      }),
+    },
+  })),
+}));
+
+describe("Auth0Client Extended Features", () => {
+  let auth0Client: Auth0Client;
+
+  beforeEach(() => {
+    auth0Client = new Auth0Client();
+  });
+
+  it("should send passwordless SMS successfully", async () => {
+    const result = await auth0Client.sendPasswordlessSMS("+1234567890");
+
+    expect(result.phone_number).toBe("+1234567890");
+    expect(result.status).toBe("sent");
+  });
+
+  it("should handle MFA challenge", async () => {
+    const result = await auth0Client.sendMFAChallenge("test_mfa_token");
+
+    expect(result.challenge_type).toBe("otp");
+    expect(result.oob_code).toBe("test_oob_code");
+  });
+
+  it("should get user profile", async () => {
+    const result = await auth0Client.getUserProfile("test_access_token");
+
+    expect(result.sub).toBe("auth0|123456789");
+    expect(result.email).toBe("user@example.com");
+    expect(result.name).toBe("John Doe");
+  });
+
+  it("should update user metadata", async () => {
+    const result = await auth0Client.updateUserMetadata("auth0|123456789", {
+      role: "admin",
+    });
+
+    expect(result.user_metadata.role).toBe("admin");
+  });
+});
 ```
 
 ## ✨ Code Quality & Standards
@@ -582,7 +1033,7 @@ yarn lint-staged
 
 ### External Services Enhancements
 
-- **providers/**: Service abstraction layer (Stripe payments, Resend emails, Twilio SMS)
+- **providers/**: Service abstraction layer (Stripe payments, Resend emails, Twilio SMS, Auth providers)
 - **clients/**: HTTP clients for external APIs with retry logic and rate limiting
 - **webhooks/**: Webhook handlers for payment confirmations, email events, SMS delivery status
 - **adapters/**: Data transformation between external and internal formats
@@ -590,6 +1041,7 @@ yarn lint-staged
 - **mocks/**: Mock implementations for testing and development environments
 - **configs/**: Service-specific configuration and environment variables
 - **templates/**: Email templates (React components for Resend) and SMS templates
+- **auth/**: Authentication providers (Auth0, Supabase), JWT handling, social login strategies
 
 ### Shared Enhancements
 
@@ -666,6 +1118,9 @@ yarn workspace external-services add stripe
 yarn workspace external-services add resend
 yarn workspace external-services add twilio
 yarn workspace external-services add @sendgrid/mail
+yarn workspace external-services add auth0
+yarn workspace external-services add jsonwebtoken @types/jsonwebtoken
+yarn workspace external-services add jwks-rsa
 
 # Run tests
 yarn test
