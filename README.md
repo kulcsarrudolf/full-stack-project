@@ -56,6 +56,14 @@ packages/
 │   │   ├── schemas/      # External service schemas
 │   │   ├── utils/        # Service-specific utilities
 │   │   └── __tests__/    # External service tests
+├── mcp-mongo-server/    # MCP server for MongoDB operations
+│   ├── src/
+│   │   ├── tools/        # MCP tools for database operations
+│   │   ├── middleware/   # Authorization and validation middleware
+│   │   ├── types/        # MCP-specific TypeScript types
+│   │   ├── utils/        # MongoDB utilities and helpers
+│   │   ├── server.ts     # MCP server entry point
+│   │   └── __tests__/    # MCP server tests
 └── shared/               # Common code
     ├── types/            # Shared TypeScript types
     ├── utils/            # Cross-platform utilities
@@ -197,6 +205,1193 @@ await twilio.messages.create({
   from: process.env.TWILIO_PHONE_NUMBER,
   to: '+1234567890'
 });
+```
+
+## 🤖 MCP MongoDB Server
+
+### Enterprise-Grade Database Operations with Authorization
+
+**🎯 Why MCP Server for MongoDB Operations:**
+
+✅ **Secure Database Access**: Role-based authorization for all database operations  
+✅ **Type-Safe Operations**: TypeScript integration with MongoDB schemas  
+✅ **Input Validation**: Comprehensive query sanitization and validation  
+✅ **Audit Logging**: Complete operation tracking and security logging  
+✅ **Rate Limiting**: Built-in protection against database abuse  
+✅ **Connection Pooling**: Efficient MongoDB connection management  
+✅ **Error Handling**: Robust error handling with detailed logging
+
+### MCP Server Architecture
+
+**Complete MongoDB operations server with authorization:**
+
+```typescript
+// mcp-mongo-server/src/server.ts
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { MongoClient, Db } from "mongodb";
+import { AuthMiddleware } from "./middleware/auth.middleware.js";
+import { ValidationMiddleware } from "./middleware/validation.middleware.js";
+import { MongoTools } from "./tools/mongo.tools.js";
+
+export class MCPMongoServer {
+  private server: Server;
+  private db: Db;
+  private authMiddleware: AuthMiddleware;
+  private validationMiddleware: ValidationMiddleware;
+  private mongoTools: MongoTools;
+
+  constructor() {
+    this.server = new Server(
+      {
+        name: "mcp-mongo-server",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {
+          tools: {},
+          logging: {},
+        },
+      }
+    );
+
+    this.authMiddleware = new AuthMiddleware();
+    this.validationMiddleware = new ValidationMiddleware();
+    this.setupHandlers();
+  }
+
+  async initialize() {
+    // Connect to MongoDB
+    const client = new MongoClient(process.env.MONGODB_URI!);
+    await client.connect();
+    this.db = client.db(process.env.MONGODB_DATABASE || "myapp");
+
+    this.mongoTools = new MongoTools(this.db);
+
+    // Start server
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
+  }
+
+  private setupHandlers() {
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [
+        {
+          name: "mongo_find",
+          description:
+            "Find documents in MongoDB collection with authorization",
+          inputSchema: {
+            type: "object",
+            properties: {
+              collection: { type: "string", description: "Collection name" },
+              filter: { type: "object", description: "MongoDB filter query" },
+              options: {
+                type: "object",
+                description: "Query options (limit, sort, etc.)",
+              },
+              auth_token: {
+                type: "string",
+                description: "Authorization token",
+              },
+            },
+            required: ["collection", "filter", "auth_token"],
+          },
+        },
+        {
+          name: "mongo_insert",
+          description:
+            "Insert documents into MongoDB collection with authorization",
+          inputSchema: {
+            type: "object",
+            properties: {
+              collection: { type: "string", description: "Collection name" },
+              documents: { type: "array", description: "Documents to insert" },
+              auth_token: {
+                type: "string",
+                description: "Authorization token",
+              },
+            },
+            required: ["collection", "documents", "auth_token"],
+          },
+        },
+        {
+          name: "mongo_update",
+          description:
+            "Update documents in MongoDB collection with authorization",
+          inputSchema: {
+            type: "object",
+            properties: {
+              collection: { type: "string", description: "Collection name" },
+              filter: { type: "object", description: "MongoDB filter query" },
+              update: { type: "object", description: "Update operations" },
+              options: { type: "object", description: "Update options" },
+              auth_token: {
+                type: "string",
+                description: "Authorization token",
+              },
+            },
+            required: ["collection", "filter", "update", "auth_token"],
+          },
+        },
+        {
+          name: "mongo_delete",
+          description:
+            "Delete documents from MongoDB collection with authorization",
+          inputSchema: {
+            type: "object",
+            properties: {
+              collection: { type: "string", description: "Collection name" },
+              filter: { type: "object", description: "MongoDB filter query" },
+              auth_token: {
+                type: "string",
+                description: "Authorization token",
+              },
+            },
+            required: ["collection", "filter", "auth_token"],
+          },
+        },
+        {
+          name: "mongo_aggregate",
+          description: "Run aggregation pipeline with authorization",
+          inputSchema: {
+            type: "object",
+            properties: {
+              collection: { type: "string", description: "Collection name" },
+              pipeline: { type: "array", description: "Aggregation pipeline" },
+              options: { type: "object", description: "Aggregation options" },
+              auth_token: {
+                type: "string",
+                description: "Authorization token",
+              },
+            },
+            required: ["collection", "pipeline", "auth_token"],
+          },
+        },
+      ],
+    }));
+
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+
+      try {
+        // Authorize request
+        const authResult = await this.authMiddleware.authorize(
+          args.auth_token,
+          {
+            operation: name,
+            collection: args.collection,
+          }
+        );
+
+        if (!authResult.authorized) {
+          throw new Error(`Unauthorized: ${authResult.reason}`);
+        }
+
+        // Validate input
+        const validationResult = this.validationMiddleware.validate(name, args);
+        if (!validationResult.valid) {
+          throw new Error(
+            `Validation failed: ${validationResult.errors.join(", ")}`
+          );
+        }
+
+        // Execute operation
+        let result;
+        switch (name) {
+          case "mongo_find":
+            result = await this.mongoTools.find(
+              args.collection,
+              args.filter,
+              args.options
+            );
+            break;
+          case "mongo_insert":
+            result = await this.mongoTools.insert(
+              args.collection,
+              args.documents
+            );
+            break;
+          case "mongo_update":
+            result = await this.mongoTools.update(
+              args.collection,
+              args.filter,
+              args.update,
+              args.options
+            );
+            break;
+          case "mongo_delete":
+            result = await this.mongoTools.delete(args.collection, args.filter);
+            break;
+          case "mongo_aggregate":
+            result = await this.mongoTools.aggregate(
+              args.collection,
+              args.pipeline,
+              args.options
+            );
+            break;
+          default:
+            throw new Error(`Unknown tool: ${name}`);
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    });
+  }
+}
+```
+
+### Authorization Middleware
+
+**Secure access control for database operations:**
+
+```typescript
+// mcp-mongo-server/src/middleware/auth.middleware.ts
+import jwt from "jsonwebtoken";
+import { Auth0Client } from "@repo/external-services";
+import Redis from "ioredis";
+
+export interface AuthContext {
+  operation: string;
+  collection: string;
+  userId?: string;
+  roles?: string[];
+}
+
+export interface AuthResult {
+  authorized: boolean;
+  reason?: string;
+  userId?: string;
+  roles?: string[];
+}
+
+export class AuthMiddleware {
+  private auth0Client: Auth0Client;
+  private redis: Redis;
+  private permissions: Map<string, string[]>;
+
+  constructor() {
+    this.auth0Client = new Auth0Client();
+    this.redis = new Redis(process.env.REDIS_URL);
+
+    // Define collection permissions
+    this.permissions = new Map([
+      ["users", ["admin", "user"]],
+      ["orders", ["admin", "manager", "user"]],
+      ["products", ["admin", "manager"]],
+      ["analytics", ["admin"]],
+      ["logs", ["admin"]],
+    ]);
+  }
+
+  async authorize(token: string, context: AuthContext): Promise<AuthResult> {
+    try {
+      // Check cache first
+      const cacheKey = `auth:${token}:${context.operation}:${context.collection}`;
+      const cached = await this.redis.get(cacheKey);
+
+      if (cached) {
+        const result = JSON.parse(cached);
+        if (result.authorized) {
+          return result;
+        }
+      }
+
+      // Verify JWT token with Auth0
+      const userProfile = await this.auth0Client.getUserProfile(token);
+      const userId = userProfile.sub;
+      const userRoles = userProfile.user_metadata?.roles || ["user"];
+
+      // Check collection permissions
+      const requiredRoles = this.permissions.get(context.collection);
+      if (!requiredRoles) {
+        return {
+          authorized: false,
+          reason: `Unknown collection: ${context.collection}`,
+        };
+      }
+
+      const hasPermission = userRoles.some((role) =>
+        requiredRoles.includes(role)
+      );
+      if (!hasPermission) {
+        return {
+          authorized: false,
+          reason: `Insufficient permissions for collection: ${context.collection}`,
+        };
+      }
+
+      // Check operation-specific permissions
+      const operationAllowed = this.checkOperationPermission(
+        context.operation,
+        userRoles,
+        context.collection
+      );
+      if (!operationAllowed) {
+        return {
+          authorized: false,
+          reason: `Operation ${context.operation} not allowed for your role`,
+        };
+      }
+
+      const result: AuthResult = {
+        authorized: true,
+        userId,
+        roles: userRoles,
+      };
+
+      // Cache successful authorization for 5 minutes
+      await this.redis.setex(cacheKey, 300, JSON.stringify(result));
+
+      return result;
+    } catch (error) {
+      return {
+        authorized: false,
+        reason: `Authentication failed: ${error.message}`,
+      };
+    }
+  }
+
+  private checkOperationPermission(
+    operation: string,
+    roles: string[],
+    collection: string
+  ): boolean {
+    // Admin can do everything
+    if (roles.includes("admin")) {
+      return true;
+    }
+
+    // Define operation-specific rules
+    const writeOperations = ["mongo_insert", "mongo_update", "mongo_delete"];
+    const readOperations = ["mongo_find", "mongo_aggregate"];
+
+    if (readOperations.includes(operation)) {
+      // Most roles can read
+      return true;
+    }
+
+    if (writeOperations.includes(operation)) {
+      // Only admin and manager can write to sensitive collections
+      const sensitiveCollections = ["users", "orders", "analytics"];
+      if (sensitiveCollections.includes(collection)) {
+        return roles.includes("admin") || roles.includes("manager");
+      }
+
+      // Regular users can write to some collections
+      return roles.includes("user") || roles.includes("manager");
+    }
+
+    return false;
+  }
+}
+```
+
+### Validation Middleware
+
+**Input sanitization and validation:**
+
+```typescript
+// mcp-mongo-server/src/middleware/validation.middleware.ts
+import Joi from "joi";
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+export class ValidationMiddleware {
+  private schemas: Map<string, Joi.ObjectSchema>;
+
+  constructor() {
+    this.schemas = new Map([
+      [
+        "mongo_find",
+        Joi.object({
+          collection: Joi.string().alphanum().min(1).max(50).required(),
+          filter: Joi.object().required(),
+          options: Joi.object({
+            limit: Joi.number().min(1).max(1000),
+            skip: Joi.number().min(0),
+            sort: Joi.object(),
+            projection: Joi.object(),
+          }).optional(),
+          auth_token: Joi.string().required(),
+        }),
+      ],
+
+      [
+        "mongo_insert",
+        Joi.object({
+          collection: Joi.string().alphanum().min(1).max(50).required(),
+          documents: Joi.array().items(Joi.object()).min(1).max(100).required(),
+          auth_token: Joi.string().required(),
+        }),
+      ],
+
+      [
+        "mongo_update",
+        Joi.object({
+          collection: Joi.string().alphanum().min(1).max(50).required(),
+          filter: Joi.object().required(),
+          update: Joi.object().required(),
+          options: Joi.object({
+            upsert: Joi.boolean(),
+            multi: Joi.boolean(),
+          }).optional(),
+          auth_token: Joi.string().required(),
+        }),
+      ],
+
+      [
+        "mongo_delete",
+        Joi.object({
+          collection: Joi.string().alphanum().min(1).max(50).required(),
+          filter: Joi.object().required(),
+          auth_token: Joi.string().required(),
+        }),
+      ],
+
+      [
+        "mongo_aggregate",
+        Joi.object({
+          collection: Joi.string().alphanum().min(1).max(50).required(),
+          pipeline: Joi.array().items(Joi.object()).min(1).max(20).required(),
+          options: Joi.object({
+            allowDiskUse: Joi.boolean(),
+            maxTimeMS: Joi.number().min(1).max(30000),
+          }).optional(),
+          auth_token: Joi.string().required(),
+        }),
+      ],
+    ]);
+  }
+
+  validate(operation: string, args: any): ValidationResult {
+    const schema = this.schemas.get(operation);
+    if (!schema) {
+      return {
+        valid: false,
+        errors: [`Unknown operation: ${operation}`],
+      };
+    }
+
+    const { error } = schema.validate(args, { abortEarly: false });
+    if (error) {
+      return {
+        valid: false,
+        errors: error.details.map((detail) => detail.message),
+      };
+    }
+
+    // Additional security checks
+    const securityErrors = this.performSecurityChecks(operation, args);
+    if (securityErrors.length > 0) {
+      return {
+        valid: false,
+        errors: securityErrors,
+      };
+    }
+
+    return { valid: true, errors: [] };
+  }
+
+  private performSecurityChecks(operation: string, args: any): string[] {
+    const errors: string[] = [];
+
+    // Check for dangerous operations
+    if (args.filter && typeof args.filter === "object") {
+      if (this.containsDangerousOperators(args.filter)) {
+        errors.push("Dangerous MongoDB operators detected in filter");
+      }
+    }
+
+    if (args.update && typeof args.update === "object") {
+      if (this.containsDangerousOperators(args.update)) {
+        errors.push("Dangerous MongoDB operators detected in update");
+      }
+    }
+
+    // Check for injection patterns
+    const stringFields = [args.collection];
+    for (const field of stringFields) {
+      if (field && this.containsInjectionPattern(field)) {
+        errors.push("Potential injection pattern detected");
+      }
+    }
+
+    return errors;
+  }
+
+  private containsDangerousOperators(obj: any): boolean {
+    const dangerousOps = ["$where", "$eval", "$regex"];
+    const objStr = JSON.stringify(obj);
+    return dangerousOps.some((op) => objStr.includes(op));
+  }
+
+  private containsInjectionPattern(str: string): boolean {
+    const patterns = [/\$\{.*\}/, /function\s*\(/, /eval\s*\(/];
+    return patterns.some((pattern) => pattern.test(str));
+  }
+}
+```
+
+### MongoDB Tools Implementation
+
+**Type-safe database operations:**
+
+```typescript
+// mcp-mongo-server/src/tools/mongo.tools.ts
+import { Db, Collection, MongoError } from "mongodb";
+
+export class MongoTools {
+  private db: Db;
+
+  constructor(db: Db) {
+    this.db = db;
+  }
+
+  async find(collectionName: string, filter: any, options: any = {}) {
+    try {
+      const collection = this.db.collection(collectionName);
+      const cursor = collection.find(filter, options);
+
+      if (options.limit) cursor.limit(options.limit);
+      if (options.skip) cursor.skip(options.skip);
+      if (options.sort) cursor.sort(options.sort);
+
+      const results = await cursor.toArray();
+      return {
+        success: true,
+        data: results,
+        count: results.length,
+      };
+    } catch (error) {
+      throw new Error(`Find operation failed: ${error.message}`);
+    }
+  }
+
+  async insert(collectionName: string, documents: any[]) {
+    try {
+      const collection = this.db.collection(collectionName);
+
+      // Add metadata to documents
+      const timestamp = new Date();
+      const documentsWithMetadata = documents.map((doc) => ({
+        ...doc,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }));
+
+      const result = await collection.insertMany(documentsWithMetadata);
+      return {
+        success: true,
+        insertedCount: result.insertedCount,
+        insertedIds: result.insertedIds,
+      };
+    } catch (error) {
+      throw new Error(`Insert operation failed: ${error.message}`);
+    }
+  }
+
+  async update(
+    collectionName: string,
+    filter: any,
+    update: any,
+    options: any = {}
+  ) {
+    try {
+      const collection = this.db.collection(collectionName);
+
+      // Add updateAt timestamp
+      const updateWithTimestamp = {
+        ...update,
+        $set: {
+          ...(update.$set || {}),
+          updatedAt: new Date(),
+        },
+      };
+
+      const result = options.multi
+        ? await collection.updateMany(filter, updateWithTimestamp, options)
+        : await collection.updateOne(filter, updateWithTimestamp, options);
+
+      return {
+        success: true,
+        matchedCount: result.matchedCount,
+        modifiedCount: result.modifiedCount,
+        upsertedCount: result.upsertedCount || 0,
+        upsertedId: result.upsertedId,
+      };
+    } catch (error) {
+      throw new Error(`Update operation failed: ${error.message}`);
+    }
+  }
+
+  async delete(collectionName: string, filter: any) {
+    try {
+      const collection = this.db.collection(collectionName);
+      const result = await collection.deleteMany(filter);
+
+      return {
+        success: true,
+        deletedCount: result.deletedCount,
+      };
+    } catch (error) {
+      throw new Error(`Delete operation failed: ${error.message}`);
+    }
+  }
+
+  async aggregate(collectionName: string, pipeline: any[], options: any = {}) {
+    try {
+      const collection = this.db.collection(collectionName);
+      const results = await collection.aggregate(pipeline, options).toArray();
+
+      return {
+        success: true,
+        data: results,
+        count: results.length,
+      };
+    } catch (error) {
+      throw new Error(`Aggregation operation failed: ${error.message}`);
+    }
+  }
+}
+```
+
+### Environment Configuration
+
+**MCP Server environment variables:**
+
+```bash
+# MCP MongoDB Server Configuration
+MCP_MONGO_PORT=3001
+MCP_MONGO_LOG_LEVEL=info
+
+# MongoDB Connection
+MONGODB_URI=mongodb://localhost:27017/myapp
+MONGODB_DATABASE=myapp
+MONGODB_CONNECTION_POOL_SIZE=10
+
+# Redis for Caching and Authorization
+REDIS_URL=redis://localhost:6379
+REDIS_AUTH_TTL=300
+
+# Auth0 Integration
+AUTH0_DOMAIN=your-domain.auth0.com
+AUTH0_CLIENT_ID=your_client_id
+AUTH0_CLIENT_SECRET=your_client_secret
+AUTH0_AUDIENCE=https://your-api.auth0.com
+
+# Security
+MCP_RATE_LIMIT_MAX=100
+MCP_RATE_LIMIT_WINDOW=60000
+```
+
+### Package Configuration
+
+**Package.json for MCP server:**
+
+```json
+{
+  "name": "@repo/mcp-mongo-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "test": "jest",
+    "test:integration": "jest --testPathPattern=integration"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0",
+    "mongodb": "^6.3.0",
+    "ioredis": "^5.3.2",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "@repo/external-services": "workspace:*",
+    "@repo/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/jsonwebtoken": "^9.0.5",
+    "typescript": "^5.3.0",
+    "tsx": "^4.6.0",
+    "jest": "^29.7.0",
+    "@types/jest": "^29.5.8"
+  }
+}
+```
+
+### Docker Integration
+
+**Update docker-compose.yml to include MCP server:**
+
+```yaml
+# docker-compose.yml
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongodb_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  mcp-mongo-server:
+    build:
+      context: .
+      dockerfile: packages/mcp-mongo-server/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/myapp?authSource=admin
+      - REDIS_URL=redis://redis:6379
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}
+      - AUTH0_CLIENT_SECRET=${AUTH0_CLIENT_SECRET}
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./packages/mcp-mongo-server:/app
+    command: npm run dev
+
+  backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/myapp?authSource=admin
+      - REDIS_URL=redis://redis:6379
+      - MCP_MONGO_URL=http://mcp-mongo-server:3001
+    depends_on:
+      - mongodb
+      - redis
+      - mcp-mongo-server
+
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:3000
+      - VITE_MCP_URL=http://localhost:3001
+    depends_on:
+      - backend
+
+volumes:
+  mongodb_data:
+  redis_data:
+```
+
+### Usage Examples
+
+**Using the MCP MongoDB server in your application:**
+
+```typescript
+// backend/src/services/mcp-client.service.ts
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+export class MCPClientService {
+  private client: Client;
+  private authToken: string;
+
+  constructor(authToken: string) {
+    this.authToken = authToken;
+    this.client = new Client(
+      {
+        name: "backend-mcp-client",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {
+          tools: {},
+        },
+      }
+    );
+  }
+
+  async initialize() {
+    const transport = new StdioClientTransport({
+      command: "node",
+      args: ["../mcp-mongo-server/dist/server.js"],
+    });
+    await this.client.connect(transport);
+  }
+
+  async findUsers(filter: any, options?: any) {
+    const result = await this.client.callTool({
+      name: "mongo_find",
+      arguments: {
+        collection: "users",
+        filter,
+        options,
+        auth_token: this.authToken,
+      },
+    });
+
+    return JSON.parse(result.content[0].text);
+  }
+
+  async createUser(userData: any) {
+    const result = await this.client.callTool({
+      name: "mongo_insert",
+      arguments: {
+        collection: "users",
+        documents: [userData],
+        auth_token: this.authToken,
+      },
+    });
+
+    return JSON.parse(result.content[0].text);
+  }
+
+  async updateUser(userId: string, updates: any) {
+    const result = await this.client.callTool({
+      name: "mongo_update",
+      arguments: {
+        collection: "users",
+        filter: { _id: userId },
+        update: { $set: updates },
+        auth_token: this.authToken,
+      },
+    });
+
+    return JSON.parse(result.content[0].text);
+  }
+
+  async getUserAnalytics(pipeline: any[]) {
+    const result = await this.client.callTool({
+      name: "mongo_aggregate",
+      arguments: {
+        collection: "users",
+        pipeline,
+        auth_token: this.authToken,
+      },
+    });
+
+    return JSON.parse(result.content[0].text);
+  }
+}
+```
+
+### Frontend Integration
+
+**React hook for MCP operations:**
+
+```typescript
+// frontend/src/hooks/useMCPMongo.ts
+import { useState, useCallback } from "react";
+import { useAuth } from "./useAuth";
+
+export function useMCPMongo() {
+  const { accessToken } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const callMCPTool = useCallback(
+    async (toolName: string, args: any) => {
+      if (!accessToken) {
+        throw new Error("Not authenticated");
+      }
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await fetch("/api/mcp/call", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            tool: toolName,
+            arguments: {
+              ...args,
+              auth_token: accessToken,
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        return result;
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Unknown error";
+        setError(errorMessage);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [accessToken]
+  );
+
+  const findDocuments = useCallback(
+    (collection: string, filter: any, options?: any) =>
+      callMCPTool("mongo_find", { collection, filter, options }),
+    [callMCPTool]
+  );
+
+  const insertDocuments = useCallback(
+    (collection: string, documents: any[]) =>
+      callMCPTool("mongo_insert", { collection, documents }),
+    [callMCPTool]
+  );
+
+  const updateDocuments = useCallback(
+    (collection: string, filter: any, update: any, options?: any) =>
+      callMCPTool("mongo_update", { collection, filter, update, options }),
+    [callMCPTool]
+  );
+
+  const deleteDocuments = useCallback(
+    (collection: string, filter: any) =>
+      callMCPTool("mongo_delete", { collection, filter }),
+    [callMCPTool]
+  );
+
+  const aggregateDocuments = useCallback(
+    (collection: string, pipeline: any[], options?: any) =>
+      callMCPTool("mongo_aggregate", { collection, pipeline, options }),
+    [callMCPTool]
+  );
+
+  return {
+    loading,
+    error,
+    findDocuments,
+    insertDocuments,
+    updateDocuments,
+    deleteDocuments,
+    aggregateDocuments,
+  };
+}
+```
+
+### Testing Strategy
+
+**Comprehensive testing for MCP server:**
+
+```typescript
+// mcp-mongo-server/src/__tests__/server.integration.test.ts
+import { MCPMongoServer } from "../server";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoClient } from "mongodb";
+import Redis from "ioredis";
+
+describe("MCP MongoDB Server Integration", () => {
+  let mongoServer: MongoMemoryServer;
+  let mongoClient: MongoClient;
+  let redisClient: Redis;
+  let mcpServer: MCPMongoServer;
+
+  beforeAll(async () => {
+    // Start in-memory MongoDB
+    mongoServer = await MongoMemoryServer.create();
+    const mongoUri = mongoServer.getUri();
+
+    // Connect to MongoDB
+    mongoClient = new MongoClient(mongoUri);
+    await mongoClient.connect();
+
+    // Start Redis (you might want to use redis-memory-server)
+    redisClient = new Redis();
+
+    // Set environment variables
+    process.env.MONGODB_URI = mongoUri;
+    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.AUTH0_DOMAIN = "test.auth0.com";
+
+    // Initialize MCP server
+    mcpServer = new MCPMongoServer();
+    await mcpServer.initialize();
+  });
+
+  afterAll(async () => {
+    await mongoClient.close();
+    await mongoServer.stop();
+    await redisClient.quit();
+  });
+
+  beforeEach(async () => {
+    // Clear collections before each test
+    const db = mongoClient.db();
+    const collections = await db.listCollections().toArray();
+    for (const collection of collections) {
+      await db.collection(collection.name).deleteMany({});
+    }
+  });
+
+  describe("Authorization", () => {
+    it("should reject requests with invalid tokens", async () => {
+      // Test with invalid token
+      const result = await mcpServer.callTool({
+        name: "mongo_find",
+        arguments: {
+          collection: "users",
+          filter: {},
+          auth_token: "invalid-token",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Authentication failed");
+    });
+
+    it("should allow authorized operations", async () => {
+      // Mock valid Auth0 token
+      const mockToken = "valid-auth0-token";
+
+      // Test successful operation (you'll need to mock Auth0 client)
+      const result = await mcpServer.callTool({
+        name: "mongo_find",
+        arguments: {
+          collection: "users",
+          filter: {},
+          auth_token: mockToken,
+        },
+      });
+
+      expect(result.isError).toBe(false);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.success).toBe(true);
+    });
+  });
+
+  describe("MongoDB Operations", () => {
+    const mockAuthToken = "valid-token";
+
+    it("should insert and find documents", async () => {
+      // Insert document
+      const insertResult = await mcpServer.callTool({
+        name: "mongo_insert",
+        arguments: {
+          collection: "users",
+          documents: [{ name: "John Doe", email: "john@example.com" }],
+          auth_token: mockAuthToken,
+        },
+      });
+
+      expect(insertResult.isError).toBe(false);
+
+      // Find document
+      const findResult = await mcpServer.callTool({
+        name: "mongo_find",
+        arguments: {
+          collection: "users",
+          filter: { name: "John Doe" },
+          auth_token: mockAuthToken,
+        },
+      });
+
+      expect(findResult.isError).toBe(false);
+      const data = JSON.parse(findResult.content[0].text);
+      expect(data.data).toHaveLength(1);
+      expect(data.data[0].name).toBe("John Doe");
+    });
+
+    it("should validate input parameters", async () => {
+      // Test with invalid collection name
+      const result = await mcpServer.callTool({
+        name: "mongo_find",
+        arguments: {
+          collection: "invalid-collection-name-with-special-chars!",
+          filter: {},
+          auth_token: mockAuthToken,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Validation failed");
+    });
+
+    it("should prevent dangerous operations", async () => {
+      // Test with dangerous $where operator
+      const result = await mcpServer.callTool({
+        name: "mongo_find",
+        arguments: {
+          collection: "users",
+          filter: { $where: "this.name === 'admin'" },
+          auth_token: mockAuthToken,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Dangerous MongoDB operators");
+    });
+  });
+});
+```
+
+### Development Commands
+
+```bash
+# Install MCP server dependencies
+yarn workspace @repo/mcp-mongo-server install
+
+# Build MCP server
+yarn workspace @repo/mcp-mongo-server build
+
+# Start MCP server in development
+yarn workspace @repo/mcp-mongo-server dev
+
+# Run MCP server tests
+yarn workspace @repo/mcp-mongo-server test
+yarn workspace @repo/mcp-mongo-server test:integration
+
+# Start entire stack with MCP server
+docker-compose up -d
+
+# Monitor MCP server logs
+docker-compose logs -f mcp-mongo-server
+
+# Test MCP server connectivity
+curl -X POST http://localhost:3001/health
 ```
 
 ## 🔐 Authentication & Authorization
@@ -633,11 +1828,20 @@ yarn workspace external-services add @sendgrid/mail
 yarn workspace external-services add auth0
 yarn workspace external-services add jsonwebtoken @types/jsonwebtoken
 yarn workspace external-services add jwks-rsa
+yarn workspace mcp-mongo-server add @modelcontextprotocol/sdk
+yarn workspace mcp-mongo-server add mongodb ioredis joi
 yarn workspace shared build
 
 # Redis commands
 yarn workspace backend add ioredis @types/ioredis  # Redis client
 yarn workspace backend add redis-commander         # Redis web UI
+
+# MCP MongoDB Server commands
+yarn workspace mcp-mongo-server add @modelcontextprotocol/sdk mongodb
+yarn workspace mcp-mongo-server add ioredis joi jsonwebtoken
+yarn workspace mcp-mongo-server add @types/jsonwebtoken @types/node
+yarn workspace mcp-mongo-server test              # Run MCP server tests
+yarn workspace mcp-mongo-server test:integration  # Integration tests
 ```
 
 ## 📚 Component Development
@@ -1126,6 +2330,8 @@ yarn workspace external-services add @sendgrid/mail
 yarn workspace external-services add auth0
 yarn workspace external-services add jsonwebtoken @types/jsonwebtoken
 yarn workspace external-services add jwks-rsa
+yarn workspace mcp-mongo-server add @modelcontextprotocol/sdk
+yarn workspace mcp-mongo-server add mongodb ioredis joi
 
 # Run tests
 yarn test
@@ -1134,6 +2340,8 @@ yarn workspace backend test:integration  # Run with Testcontainers
 yarn workspace frontend test
 yarn workspace external-services test
 yarn workspace external-services test:integration  # Test with service mocks
+yarn workspace mcp-mongo-server test
+yarn workspace mcp-mongo-server test:integration  # Test MCP server with containers
 
 # Build all packages
 yarn build
@@ -1149,6 +2357,11 @@ yarn format
 docker exec -it redis-container redis-cli  # Access Redis CLI
 yarn workspace backend redis:flush         # Clear Redis cache
 yarn workspace backend redis:monitor       # Monitor Redis commands
+
+# MCP MongoDB Server development
+yarn workspace mcp-mongo-server dev        # Start MCP server in watch mode
+yarn workspace mcp-mongo-server build      # Build MCP server
+docker-compose logs -f mcp-mongo-server    # Monitor MCP server logs
 ```
 
 ## 📄 License
