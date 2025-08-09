@@ -44,9 +44,9 @@ packages/
 │   │   └── assets/       # Images, icons
 ├── external-services/    # Third-party integrations
 │   ├── src/
-│   │   ├── providers/    # payment.provider.ts, email.provider.ts
-│   │   ├── clients/      # stripe.client.ts, sendgrid.client.ts
-│   │   ├── webhooks/     # stripe.webhook.ts, github.webhook.ts
+│   │   ├── providers/    # payment.provider.ts, email.provider.ts, sms.provider.ts
+│   │   ├── clients/      # stripe.client.ts, resend.client.ts, twilio.client.ts
+│   │   ├── webhooks/     # stripe.webhook.ts, resend.webhook.ts, twilio.webhook.ts
 │   │   ├── adapters/     # External API adapters
 │   │   ├── schemas/      # External service schemas
 │   │   ├── utils/        # Service-specific utilities
@@ -93,10 +93,14 @@ user-api.util.ts         # kebab-case utilities
 
 ```typescript
 stripe.provider.ts       # Payment provider
-sendgrid.client.ts       # Email service client
+resend.client.ts         # Email service client
+twilio.client.ts         # SMS service client
+sendgrid.client.ts       # Alternative email client
 github.webhook.ts        # Webhook handlers
 slack.adapter.ts         # API adapters
 payment.schema.ts        # Service schemas
+email.schema.ts          # Email validation schemas
+sms.schema.ts            # SMS validation schemas
 webhook.util.ts          # Utility functions
 stripe.test.ts           # Service tests
 ```
@@ -164,6 +168,28 @@ await redis.setex(`session:${userId}`, 3600, JSON.stringify(session));
 
 // Cache API response
 await redis.setex(`api:users:${page}`, 300, JSON.stringify(users));
+
+// External services integration example
+import { Resend } from 'resend';
+import { Twilio } from 'twilio';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+const twilio = new Twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// Send welcome email
+await resend.emails.send({
+  from: 'onboarding@app.com',
+  to: ['user@example.com'],
+  subject: 'Welcome to our platform!',
+  react: WelcomeEmailTemplate({ name: 'John' })
+});
+
+// Send SMS verification
+await twilio.messages.create({
+  body: `Your verification code is: ${code}`,
+  from: process.env.TWILIO_PHONE_NUMBER,
+  to: '+1234567890'
+});
 ```
 
 ## 🤖 Cursor Agent Configuration
@@ -206,7 +232,9 @@ AI-powered development with Cursor agent configured for TypeScript monorepo:
 "Add Redis caching to the user service with 1 hour TTL"
 "Generate integration tests for the authentication flow"
 "Add Stripe payment processing with webhook handling"
-"Create SendGrid email templates with dynamic content"
+"Create Resend email templates with React components"
+"Add Twilio SMS verification with rate limiting"
+"Build notification system with email and SMS providers"
 ```
 
 **🧠 Intelligent Code Assistance**:
@@ -254,6 +282,13 @@ MONGODB_URI=mongodb://localhost:27017/myapp
 MONGODB_ATLAS_URI=mongodb+srv://...
 REDIS_URL=redis://localhost:6379
 REDIS_CLOUD_URL=redis://username:password@host:port
+
+# External Services
+STRIPE_SECRET_KEY=sk_test_...
+RESEND_API_KEY=re_...
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_PHONE_NUMBER=+1234567890
 ```
 
 ## 📖 API Documentation
@@ -274,6 +309,8 @@ yarn workspace backend add fastify
 yarn workspace backend add ioredis @types/ioredis
 yarn workspace frontend add react
 yarn workspace external-services add stripe
+yarn workspace external-services add resend
+yarn workspace external-services add twilio
 yarn workspace external-services add @sendgrid/mail
 yarn workspace shared build
 
@@ -417,6 +454,84 @@ describe("StripeProvider", () => {
     // Test webhook signature validation and processing
   });
 });
+
+// external-services/src/__tests__/resend.provider.test.ts
+import { ResendProvider } from "../providers/resend.provider";
+import { jest } from "@jest/globals";
+
+jest.mock("resend", () => ({
+  Resend: jest.fn().mockImplementation(() => ({
+    emails: {
+      send: jest.fn().mockResolvedValue({
+        id: "email_123",
+        to: ["user@example.com"],
+        from: "noreply@app.com",
+        subject: "Welcome",
+      }),
+    },
+  })),
+}));
+
+describe("ResendProvider", () => {
+  let resendProvider: ResendProvider;
+
+  beforeEach(() => {
+    resendProvider = new ResendProvider();
+  });
+
+  it("should send email successfully", async () => {
+    const result = await resendProvider.sendEmail({
+      to: ["user@example.com"],
+      from: "noreply@app.com",
+      subject: "Welcome to our app",
+      html: "<h1>Welcome!</h1>",
+    });
+
+    expect(result.id).toBe("email_123");
+    expect(result.to).toContain("user@example.com");
+  });
+});
+
+// external-services/src/__tests__/twilio.provider.test.ts
+import { TwilioProvider } from "../providers/twilio.provider";
+import { jest } from "@jest/globals";
+
+jest.mock("twilio", () => ({
+  Twilio: jest.fn().mockImplementation(() => ({
+    messages: {
+      create: jest.fn().mockResolvedValue({
+        sid: "SM123456789",
+        status: "queued",
+        to: "+1234567890",
+        from: "+0987654321",
+      }),
+    },
+  })),
+}));
+
+describe("TwilioProvider", () => {
+  let twilioProvider: TwilioProvider;
+
+  beforeEach(() => {
+    twilioProvider = new TwilioProvider();
+  });
+
+  it("should send SMS successfully", async () => {
+    const result = await twilioProvider.sendSMS({
+      to: "+1234567890",
+      from: "+0987654321",
+      body: "Your verification code is 123456",
+    });
+
+    expect(result.sid).toBe("SM123456789");
+    expect(result.status).toBe("queued");
+    expect(result.to).toBe("+1234567890");
+  });
+
+  it("should handle SMS delivery status webhook", async () => {
+    // Test Twilio webhook processing for delivery status
+  });
+});
 ```
 
 ## ✨ Code Quality & Standards
@@ -467,13 +582,14 @@ yarn lint-staged
 
 ### External Services Enhancements
 
-- **providers/**: Service abstraction layer (payment, email, storage)
-- **clients/**: HTTP clients for external APIs with retry logic
-- **webhooks/**: Webhook handlers for third-party services
+- **providers/**: Service abstraction layer (Stripe payments, Resend emails, Twilio SMS)
+- **clients/**: HTTP clients for external APIs with retry logic and rate limiting
+- **webhooks/**: Webhook handlers for payment confirmations, email events, SMS delivery status
 - **adapters/**: Data transformation between external and internal formats
-- **schemas/**: External API response/request validation schemas
-- **mocks/**: Mock implementations for testing and development
+- **schemas/**: External API response/request validation schemas (Zod/Joi)
+- **mocks/**: Mock implementations for testing and development environments
 - **configs/**: Service-specific configuration and environment variables
+- **templates/**: Email templates (React components for Resend) and SMS templates
 
 ### Shared Enhancements
 
@@ -547,6 +663,8 @@ yarn dev
 yarn workspace backend add fastify
 yarn workspace frontend add react
 yarn workspace external-services add stripe
+yarn workspace external-services add resend
+yarn workspace external-services add twilio
 yarn workspace external-services add @sendgrid/mail
 
 # Run tests
